@@ -1,132 +1,233 @@
-# AlgoTech Hub - Formation Spring Microservices 🚀
+# AlgoTech Hub - Documentation Projet
 
-Ce projet a été conçu pour le club **AlgoTech** de l'Université de Dschang afin d'enseigner de manière 100% pratique l'architecture orientée Microservices avec **Spring Boot 3** et **Java 21**.
+AlgoTech Hub est une application microservices Spring Boot pour gérer un club (membres, événements, réservations) avec communication synchrone (OpenFeign) et asynchrone (RabbitMQ).
 
-## 🏗️ Architecture du Système
+## 1. Vue d'ensemble
 
-Le système **AlgoTech Hub** modélise la gestion interne du club. Afin de bien illustrer les concepts de ségrégation des données et de tolérance aux pannes, le projet est découpé en plusieurs microservices métier et d'infrastructure.
+### Services
+- `discovery-service` : registre Eureka (`:8761`)
+- `api-gateway` : point d'entrée unique (`:8080` en local, `:8888` via Docker host)
+- `member-service` : gestion des membres (`:8081`)
+- `event-service` : gestion des événements (`:8082`)
+- `booking-service` : gestion des réservations (`:8083`)
+- `notification-service` : consommation RabbitMQ + persistance des notifications (`:8084`)
 
-### Diagramme d'Architecture Synthétique
+### Infrastructure
+- MySQL 8 (4 bases)
+- RabbitMQ (broker + management UI)
+- Eureka (service discovery)
 
-```mermaid
-graph TD
-    Client([💻 Client / Étudiant]) -->|Requêtes HTTP REST| Gateway(🚪 API Gateway)
-    
-    subgraph Infrastructure
-        Gateway -.-> |Routage Dynamique| Discovery((🔍 Eureka Discovery))
-        Discovery
-    end
-    
-    subgraph Microservices Métier
-        Gateway -->|/api/members| Member(👤 Member Service)
-        Gateway -->|/api/events| Event(📅 Event Service)
-        Gateway -->|/api/bookings| Booking(🎟️ Booking Service)
-        Gateway -->|/api/notifications| Notification(✉️ Notification Service)
-    end
-    
-    subgraph Bases de Données & Message Broker
-        DB[(🐬 MySQL : 4 Bases logiques)]
-        MQ[[🐇 RabbitMQ Broker]]
-    end
+### Flux fonctionnel
+1. Création d'un membre (trainer + student)
+2. Création d'un événement (validation du `trainerId` via `member-service`)
+3. Création d'une réservation (validation member/event via Feign)
+4. Publication d'un message RabbitMQ
+5. `notification-service` consomme et sauvegarde dans `notification_db.notification_logs`
 
-    %% Sync Calls (OpenFeign)
-    Booking == OpenFeign ==> Member
-    Booking == OpenFeign ==> Event
-    Event == OpenFeign ==> Member
-    
-    %% Async Calls (AMQP)
-    Booking -.- |Publie événement de réservation| MQ
-    MQ -.- |Consomme événement| Notification
-    
-    %% DB connections
-    Member --- DB
-    Event --- DB
-    Booking --- DB
-    Notification --- DB
-    
-    %% Auto-Registration
-    Member -. S'enregistre .-> Discovery
-    Event -. S'enregistre .-> Discovery
-    Booking -. S'enregistre .-> Discovery
-    Notification -. S'enregistre .-> Discovery
-```
+## 2. Architecture technique
 
-### 1. Composants d'Infrastructure (Service Mesh)
-*   **Discovery Service (Eureka Server)** : L'annuaire du réseau. Aucun microservice métier ne connaît l'adresse IP d'un autre. Ils s'enregistrent tous sur cet annuaire lors de leur démarrage, ce qui permet la résolution des noms (ex: "Trouve-moi le *member-service*").
-*   **API Gateway** : La porte d'entrée unique de notre application. Elle redirige intelligemment toutes les requêtes entrantes (`/api/members/**`) vers la bonne instance, allégeant ainsi le client.
+- `event-service` appelle `member-service` via Feign
+- `booking-service` appelle `member-service` et `event-service` via Feign
+- `booking-service` publie sur `algotech_exchange` avec `booking.routing.key`
+- `notification-service` consomme la queue `notification_queue`
+- Les services se déclarent dans Eureka et sont routés via `api-gateway`
 
-### 2. Microservices Métier (Domaines)
-*   👔 **Member Service (Port 8081)** : Gère le cycle de vie des membres (Admin, Formateur, Étudiant) et leurs compétences.
-*   📅 **Event Service (Port 8082)** : Gère le calendrier et les capacités des événements et des formations du club. *Exemple de flux : Lors de la création d'une formation, il contacte le `member-service` de manière synchrone pour vérifier que le formateur assigné est bien valide.*
-*   🎟️ **Booking Service (Port 8083)** : Gère la prise de billet. **C'est le chef d'orchestre complexe :** Il utilise des clients **OpenFeign** pour interroger simultanément le `member-service` (l'étudiant existe-t-il ?) et `event-service` (reste-t-il des places ?).
-*   ✉️ **Notification Service (Port 8084)** : Gère l'historique des emails et des alertes envoyées par AlgoTech.
+## 3. Profils et configuration
 
-### 3. Le Flux de Communication Asynchrone (RabbitMQ)
-Un des objectifs pédagogiques majeurs est d'apprendre la différence entre les communications synchrones (comme vu plushaut avec OpenFeign) et asynchrones.
-*   Lorsqu'une réservation est validée en base de données par le `booking-service`, l'étudiant doit recevoir un mail de confirmation. 
-*   Au lieu d'attendre que l'email parte (ce qui prend du temps et peut bloquer la requête HTTP), le `booking-service` poste instantanément un message type `NotificationMessage` dans **RabbitMQ**. La requête utilisateur répond immédiatement.
-*   De son côté, le `notification-service` écoute passivement la file d'attente, capte le message de confirmation sans pression temporelle, et l'enregistre en base.
+Chaque service métier/gateway a un `application.yml` avec profil actif par défaut : `dev`.
 
----
+- Profil `dev` : dépendances externes en `localhost`
+- Profil `docker` : dépendances externes via noms de services Docker (`mysql-db`, `rabbitmq`, `discovery-service`)
 
-## 💻 Comment utiliser le projet (Ordre de Lancement)
+## 4. Prérequis
 
-Le projet utilise des `Profile` Spring. 
-*   `dev` : Configuration lorsque les services tournent sur l'IDE natif local (pointe sur `localhost`).
-*   `docker` : Configuration pour Docker Compose.
+### Pour exécution Docker
+- Docker
+- Docker Compose
 
-### Option 1 : Tout lancer via Docker Compose (Automatique)
-Avez les Dockerfiles en build multi-étapes inclus, vous n'avez pas besoin d'installer Java sur votre PC. Maven et Java sont exécutés dans le conteneur !
+### Pour exécution locale (hors Docker)
+- Java 21
+- Maven (ou `./mvnw`)
+- Docker (uniquement pour MySQL + RabbitMQ)
+
+## 5. Initialisation des données
+
+Le script [backend/database/init.sql](backend/database/init.sql) crée automatiquement :
+- `member_db`
+- `event_db`
+- `booking_db`
+- `notification_db`
+
+## 6. Lancement complet avec Docker (recommandé)
+
+Depuis la racine du projet :
 
 ```bash
-# Construire et démarrer l'ensemble de l'architecture
-docker-compose up -d --build
-
-# Voir les logs du système complet
-docker-compose logs -f
-
-# Arrêter les services
-docker-compose down
-
-# Arrêter les services et supprimer définitivement la base de données
-docker-compose down -v
+docker compose down -v --remove-orphans
+docker compose up -d --build
 ```
 
-### Option 2 : Lancer manuellement pour le développement (Formation avec Maven)
+Vérifier :
 
-Pendant la formation, les développeurs voudront écrire et tester le code sur leur propre machine en exécutant les dossiers `backend/*` un par un via leur IDE ou la console Maven locale.
-
-**Étape 1 : Démarrer uniquement la Base de Données et RabbitMQ**
 ```bash
-docker-compose up -d mysql-db phpmyadmin rabbitmq
+docker compose ps
+docker compose logs -f discovery-service api-gateway member-service event-service booking-service notification-service
 ```
-*(MySQL est alors mappé sur `localhost:3308` avec ses 4 bases déjà créées, `phpMyAdmin` sur `localhost:8081` et RabbitMQ sur `localhost:15672`)*
 
-**Étape 2 : Démarrer l'infrastructure réseau (L'ordre est important !)**
-Il faut que l'annuaire Eureka soit vivant en premier pour que les autres s'y rattachent. Ouvrez plusieurs terminaux distincts :
-1.  **Discovery :** `cd backend/discovery-service && ./mvnw spring-boot:run` *(Attendez que le terminal affiche *Started...*)*
-2.  **Gateway :** `cd backend/api-gateway && ./mvnw spring-boot:run`
+Accès utiles :
+- Eureka : `http://localhost:8761`
+- Gateway (point d'entrée API) : `http://localhost:8888`
+- RabbitMQ Management : `http://localhost:15672` (user: `user`, pass: `password`)
+- phpMyAdmin : `http://localhost:8088`
 
-**Étape 3 : Démarrer les services Indépendants**
-Ces services n'ont pas d'ordre entre eux car ils se retrouvent via Eureka :
-3.  `cd backend/member-service && ./mvnw spring-boot:run`
-4.  `cd backend/notification-service && ./mvnw spring-boot:run`
+## 7. Lancement local (dev) pas à pas
 
-**Étape 4 : Démarrer les services Dépendants**
-5.  `cd backend/event-service && ./mvnw spring-boot:run` (A besoin du *member* pour créer un event)
-6.  `cd backend/booking-service && ./mvnw spring-boot:run` (A besoin de tout le monde)
+### 7.1 Démarrer l'infra (MySQL + RabbitMQ)
 
----
+```bash
+docker compose up -d mysql-db rabbitmq phpmyadmin
+```
 
-## 🛠 Tester les API !
+### 7.2 Démarrer les services (ordre conseillé)
 
-Une fois vos services lancés manuellement (via eclipse ou le prompt), vous pouvez facilement tester en passant **toujours** avec l'API Gateway sur le port **8080** :
+Ouvre un terminal par service :
 
-1.  Créer un membre :
-    `POST http://localhost:8080/api/members`
-2.  Créer un événement :
-    `POST http://localhost:8080/api/events`
-3.  Prendre un billet / Effectuer une réservation :
-    `POST http://localhost:8080/api/bookings`
+```bash
+cd backend/discovery-service && ./mvnw spring-boot:run
+cd backend/api-gateway && ./mvnw spring-boot:run
+cd backend/member-service && ./mvnw spring-boot:run
+cd backend/event-service && ./mvnw spring-boot:run
+cd backend/booking-service && ./mvnw spring-boot:run
+cd backend/notification-service && ./mvnw spring-boot:run
+```
 
-Laissez la magie de Spring Cloud s'occuper de router vos éléments ! Bon code à tout le club AlgoTech ! 👨‍💻🎓
+Point d'entrée API local : `http://localhost:8080`
+
+## 8. Ports et paramètres importants
+
+### Ports
+- Gateway : `8080` (host Docker: `8888`)
+- Discovery : `8761`
+- Member : `8081`
+- Event : `8082`
+- Booking : `8083`
+- Notification : `8084`
+- MySQL host : `3308`
+- RabbitMQ : `5672` / management `15672`
+
+### Credentials par défaut
+- MySQL: user `root`, pass `password`
+- RabbitMQ: user `user`, pass `password` (ne pas utiliser `guest`)
+
+### URL JDBC (déjà corrigées)
+Les URLs incluent `allowPublicKeyRetrieval=true&useSSL=false` pour éviter l'erreur MySQL "Public Key Retrieval is not allowed".
+
+## 9. Entités de base par service
+
+### member-service
+- `Member`
+  - `id` (Long)
+  - `firstName` (String, obligatoire)
+  - `lastName` (String, obligatoire)
+  - `email` (String, obligatoire, unique)
+  - `role` (Enum: `STUDENT`, `TRAINER`, `ADMIN`)
+  - `skills` (String)
+
+### event-service
+- `ClubEvent`
+  - `id` (Long)
+  - `title` (String, obligatoire)
+  - `description` (String)
+  - `eventDate` (LocalDateTime, future, obligatoire)
+  - `location` (String)
+  - `trainerId` (Long, obligatoire)
+  - `maxCapacity` (Integer, min 1)
+
+### booking-service
+- `Booking`
+  - `id` (Long)
+  - `memberId` (Long, obligatoire)
+  - `eventId` (Long, obligatoire)
+  - `bookingDate` (LocalDateTime)
+  - `status` (Enum: `PENDING`, `CONFIRMED`, `CANCELLED`)
+
+Règles:
+- Vérifie existence member/event via Feign
+- Vérifie la capacité événement
+- Crée réservation avec `status=CONFIRMED`
+- Publie une notification RabbitMQ
+
+### notification-service
+- `NotificationLog`
+  - `id` (Long)
+  - `recipientEmail` (String)
+  - `subject` (String)
+  - `message` (TEXT)
+  - `sentAt` (LocalDateTime)
+
+Note: ce service n'expose pas de contrôleur REST actuellement. Il consomme RabbitMQ et écrit en base.
+
+## 10. Endpoints REST disponibles
+
+Tous testables via Gateway:
+
+### Member
+- `POST /api/members`
+- `GET /api/members`
+- `GET /api/members/{id}`
+
+### Event
+- `POST /api/events`
+- `GET /api/events`
+- `GET /api/events/{id}`
+
+### Booking
+- `POST /api/bookings`
+- `GET /api/bookings/member/{memberId}`
+
+### Notification
+- Pas d'endpoint REST exposé actuellement (`queue consumer` uniquement)
+
+## 11. Scénario de test recommandé (ordre)
+
+1. Créer un membre trainer
+2. Créer un membre student
+3. Créer un event avec `trainerId` du trainer
+4. Créer un booking avec `memberId` du student et `eventId`
+5. Vérifier en base `notification_db.notification_logs` qu'une notification est persistée
+
+## 12. Collection Postman
+
+Collection fournie :
+- [postman/AlgoTech-Hub.postman_collection.json](postman/AlgoTech-Hub.postman_collection.json)
+
+Importe la collection dans Postman puis ajuste seulement la variable:
+- `baseUrl`
+
+Valeurs:
+- Local dev : `http://localhost:8080`
+- Docker : `http://localhost:8888`
+
+La collection capture automatiquement `trainerId`, `memberId`, `eventId`, `bookingId` pour enchaîner les appels.
+
+## 13. Dépannage rapide
+
+### Erreur MySQL: `Public Key Retrieval is not allowed`
+- Vérifier que l'URL JDBC contient `allowPublicKeyRetrieval=true&useSSL=false`
+
+### Erreur RabbitMQ: `PLAIN login refused: user 'guest'`
+- Utiliser `user/password`, pas `guest`
+
+### Erreur RabbitMQ: `NOT_FOUND - no queue 'notification_queue'`
+- Vérifier que `booking-service` et `notification-service` déclarent la même queue/exchange/routing key
+
+### Erreur Eureka: `UnknownHostException discovery-service`
+- Vérifier que `discovery-service` est démarré et `Up`
+- Vérifier profil (`dev` vs `docker`) et URL Eureka correspondante
+
+## 14. Arrêt et nettoyage
+
+```bash
+docker compose down
+docker compose down -v
+```
