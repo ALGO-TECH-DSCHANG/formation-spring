@@ -9,12 +9,12 @@ LOG_DIR="$RUN_DIR/logs"
 INFRA_FILE="$ROOT_DIR/docker-compose.infra.yml"
 
 SERVICES=(
-  "discovery-service:discovery-service:8761:no:no"
-  "member-service:member-service:8081:yes:no"
-  "event-service:event-service:8082:yes:no"
-  "booking-service:booking-service:8083:yes:yes"
-  "notification-service:notification-service:8084:yes:yes"
-  "api-gateway:api-gateway:8080:no:no"
+  "discovery-service:discovery-service:8761:0:0"
+  "member-service:member-service:8081:5432:0"
+  "event-service:event-service:8082:5432:0"
+  "booking-service:booking-service:8083:3306:5672"
+  "notification-service:notification-service:8084:3306:5672"
+  "api-gateway:api-gateway:8080:0:0"
 )
 
 usage() {
@@ -67,19 +67,42 @@ build_all() {
   done
 }
 
+jar_needs_rebuild() {
+  local dir="$1"
+  local jar_file="$2"
+
+  if [[ -z "$jar_file" || ! -f "$jar_file" ]]; then
+    return 0
+  fi
+
+  if [[ "$ROOT_DIR/$dir/pom.xml" -nt "$jar_file" ]]; then
+    return 0
+  fi
+
+  if [[ "$ROOT_DIR/$dir/src" -nt "$jar_file" ]]; then
+    return 0
+  fi
+
+  if find "$ROOT_DIR/$dir/src" -type f -newer "$jar_file" | head -n 1 | grep -q .; then
+    return 0
+  fi
+
+  return 1
+}
+
 start_one() {
   local name="$1"
   local dir="$2"
   local port="$3"
-  local needs_db="$4"
-  local needs_rabbit="$5"
+  local db_port="$4"
+  local rabbit_port="$5"
   local pid_file="$PID_DIR/$name.pid"
   local log_file="$LOG_DIR/$name.log"
   local jar_file
 
   jar_file="$(ls "$ROOT_DIR/$dir"/target/"$name"-*.jar 2>/dev/null | grep -v '\.original$' | head -n1 || true)"
-  if [[ -z "$jar_file" ]]; then
-    echo "[start] Missing jar for $name, building first"
+  if jar_needs_rebuild "$dir" "$jar_file"; then
+    echo "[start] Building fresh jar for $name"
     build_one "$name" "$dir"
     jar_file="$(ls "$ROOT_DIR/$dir"/target/"$name"-*.jar 2>/dev/null | grep -v '\.original$' | head -n1 || true)"
   fi
@@ -89,11 +112,11 @@ start_one() {
     return
   fi
 
-  if [[ "$needs_db" == "yes" ]] && ! port_is_open 3308; then
-    echo "[warn] MySQL port 3308 is closed. $name may fail to start."
+  if [[ "$db_port" != "0" ]] && ! port_is_open "$db_port"; then
+    echo "[warn] DB port $db_port is closed. $name may fail to start."
   fi
-  if [[ "$needs_rabbit" == "yes" ]] && ! port_is_open 5672; then
-    echo "[warn] RabbitMQ port 5672 is closed. $name may fail to start."
+  if [[ "$rabbit_port" != "0" ]] && ! port_is_open "$rabbit_port"; then
+    echo "[warn] RabbitMQ port $rabbit_port is closed. $name may fail to start."
   fi
 
   echo "[start] $name on port $port"
@@ -105,8 +128,8 @@ start_all() {
   check_java
   ensure_dirs
   for svc in "${SERVICES[@]}"; do
-    IFS=':' read -r name dir port needs_db needs_rabbit <<<"$svc"
-    start_one "$name" "$dir" "$port" "$needs_db" "$needs_rabbit"
+    IFS=':' read -r name dir port db_port rabbit_port <<<"$svc"
+    start_one "$name" "$dir" "$port" "$db_port" "$rabbit_port"
     sleep 2
   done
   echo "[done] Stack started. Use './run-all.sh status' or './run-all.sh logs'."

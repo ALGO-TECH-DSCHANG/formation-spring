@@ -4,26 +4,27 @@ server:
 spring:
   cloud:
     gateway:
-      discovery:
-        locator:
-          enabled: true
-      routes:
-        - id: member-service
-          uri: lb://member-service
-          predicates:
-            - Path=/api/members/**
-        - id: event-service
-          uri: lb://event-service
-          predicates:
-            - Path=/api/events/**
-        - id: booking-service
-          uri: lb://booking-service
-          predicates:
-            - Path=/api/bookings/**
-        - id: notification-service
-          uri: lb://notification-service
-          predicates:
-            - Path=/api/notifications/**
+      mvc:
+        discovery:
+          locator:
+            enabled: true
+        routes:
+          - id: member-service
+            uri: lb://member-service
+            predicates:
+              - Path=/api/members,/api/members/**
+          - id: event-service
+            uri: lb://event-service
+            predicates:
+              - Path=/api/events,/api/events/**
+          - id: booking-service
+            uri: lb://booking-service
+            predicates:
+              - Path=/api/bookings,/api/bookings/**
+          - id: notification-service
+            uri: lb://notification-service
+            predicates:
+              - Path=/api/notifications,/api/notifications/**
 
 eureka:
   client:
