@@ -24,3 +24,5 @@ Thumbs.db
 # Docker
 docker-data/
 mysql-data/
+
+.run/
